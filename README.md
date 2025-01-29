@@ -42,4 +42,4 @@ make && make install
 ```
 
 ### Acknowledgments
-Thank you very much for the extension for postgrsql: https://github.com/okbob/url_encode, its sources were used with minimal changes for easy use and installation.
+Thank you very much for the extension for postgrsql: https://github.com/okbob/url_encode, its sources were very useful.
