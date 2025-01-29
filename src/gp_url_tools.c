@@ -106,15 +106,18 @@ unsigned int decode_utf16_pair(unsigned int bytes[2]) {
     Assert(valid_utf16(bytes[0]));
     Assert(valid_utf16(bytes[1]));
 
-    return (utf16_decode_base + ((bytes[0] & utf16_decode) << 10) + (bytes[1] & utf16_decode));
+    return (utf16_decode_base + ((bytes[0] & utf16_decode) << 10) +
+            (bytes[1] & utf16_decode));
 }
 
 bool is_utf8(const char *sequence, int lenght) {
-    return 3 <= lenght && sequence[0] == '%' && sequence[1] != 'u' && sequence[1] != 'U';
+    return 3 <= lenght && sequence[0] == '%' && sequence[1] != 'u' &&
+           sequence[1] != 'U';
 }
 
 bool is_utf16(const char *sequence, int lenght) {
-    return 6 <= lenght && sequence[0] == '%' && (sequence[1] == 'u' || sequence[1] == 'U');
+    return 6 <= lenght && sequence[0] == '%' &&
+           (sequence[1] == 'u' || sequence[1] == 'U');
 }
 
 void fetch_utf16(unsigned int *byte, const char *input) {
@@ -137,7 +140,8 @@ text *decode(text *input, const char *unreserved_special) {
 
     for (int i = 0; i < input_lenght;) {
         if (cinput[i] == '%') {
-            // special character => start process '%XX' or '%XXXX' sequence of chars
+            // special character => start process '%XX' or '%XXXX' sequence of
+            // chars
             if (is_utf16(cinput + i, input_lenght - i)) {
                 // current sequence is in utf16 encoding
                 unsigned int result;
@@ -145,7 +149,7 @@ text *decode(text *input, const char *unreserved_special) {
                 unsigned char buffer[10];
 
                 fetch_utf16(bytes, cinput + i + 2);
-                
+
                 if (valid_utf16(bytes[0])) {
                     if (10 < input_lenght - i) {
                         elog(ERROR, "incomplete input string");
@@ -168,23 +172,27 @@ text *decode(text *input, const char *unreserved_special) {
                 current += pg_utf_mblen(buffer);
             } else if (is_utf8(cinput + i, input_lenght - i)) {
                 // current sequence is in utf8 encoding
-                current = write_character(current, (char2hex(cinput[i + 1]) << 4) | char2hex(cinput[i + 2]));
+                current =
+                    write_character(current, (char2hex(cinput[i + 1]) << 4) |
+                                                 char2hex(cinput[i + 2]));
                 i += 3;
             } else {
-               // common case: not enough characters in line to decode special sequence => error 'incorrect sequence of tokens'
-               elog(ERROR, "incorrect sequence of tokens");
+                // common case: not enough characters in line to decode special
+                // sequence => error 'incorrect sequence of tokens'
+                elog(ERROR, "incorrect sequence of tokens");
             }
         } else if (allowed_character(cinput[i], unreserved_special)) {
             // allowed and not '%' character => just copy it into result string
             current = write_character(current, cinput[i]);
             i += 1;
         } else {
-            // cinput[i] - is not '%' and not allowed character => error 'unexpected character'
-            elog(ERROR, "unaccepted chars in url code"); // TODO rework text of errors
+            // cinput[i] - is not '%' and not allowed character => error
+            // 'unexpected character'
+            elog(ERROR,
+                 "unaccepted chars in url code"); // TODO rework text of errors
         }
     }
     current = write_character(current, 0);
-
 
     // Convert to text and return
     output = cstring_to_text(coutput);
@@ -219,4 +227,3 @@ Datum decode_uri(PG_FUNCTION_ARGS) {
     }
     PG_RETURN_TEXT_P(decode(PG_GETARG_TEXT_PP(0), "-_.!~*'();/?:@&=+$,#"));
 }
-
