@@ -6,10 +6,10 @@
 
 PG_MODULE_MAGIC;
 
-PG_FUNCTION_INFO_V1(url_encode);
-PG_FUNCTION_INFO_V1(url_decode);
-PG_FUNCTION_INFO_V1(uri_encode);
-PG_FUNCTION_INFO_V1(uri_decode);
+PG_FUNCTION_INFO_V1(encode_url);
+PG_FUNCTION_INFO_V1(decode_url);
+PG_FUNCTION_INFO_V1(encode_uri);
+PG_FUNCTION_INFO_V1(decode_uri);
 
 Datum url_encode(PG_FUNCTION_ARGS);
 Datum url_decode(PG_FUNCTION_ARGS);
@@ -20,6 +20,17 @@ static bool allowed_character(const char c, const char *unreserved_special);
 static unsigned char char2hex(char c);
 static char *write_character(char *output, const char c);
 static text *encode(text *input, const char *unreserved_special);
+static bool valid_utf16(unsigned int byte);
+static unsigned int decode_utf16_pair(unsigned int bytes[2]);
+static text *decode(text *input, const char *unreserved_special);
+static bool is_utf8(const char *sequence, int lenght);
+static bool is_utf16(const char *sequence, int lenght);
+static void fetch_utf16(unsigned int *byte, const char *input);
+
+static const unsigned int utf16_low = 0xD800;
+static const unsigned int utf16_high = 0xDBFF;
+static const unsigned int utf16_decode = 0x03FF;
+static const unsigned int utf16_decode_base = 0x10000;
 
 static const unsigned char hexlookup[256] = {
     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
@@ -87,146 +98,125 @@ text *encode(text *input, const char *unreserved_special) {
     return output;
 }
 
-static uint32_t decode_utf16_pair(uint16_t c1, uint16_t c2) {
-    uint32_t code;
-
-    Assert(0xD800 <= c1 && c1 <= 0xDBFF);
-    Assert(0xDC00 <= c2 && c2 <= 0xDFFF);
-
-    code = 0x10000;
-    code += (c1 & 0x03FF) << 10;
-    code += (c2 & 0x03FF);
-
-    return code;
+bool valid_utf16(unsigned int byte) {
+    return utf16_low <= byte && byte <= utf16_high;
 }
 
-static text *decode(text *in_text, const char *unreserved_special) {
-    text *result;
-    char *read_ptr = VARDATA_ANY(in_text);
-    char *write_ptr;
-    int len = VARSIZE_ANY_EXHDR(in_text);
-    int real_len;
-    int processed;
+unsigned int decode_utf16_pair(unsigned int bytes[2]) {
+    Assert(valid_utf16(bytes[0]));
+    Assert(valid_utf16(bytes[1]));
 
-    real_len = 0;
+    return (utf16_decode_base + ((bytes[0] & utf16_decode) << 10) + (bytes[1] & utf16_decode));
+}
 
-    result = (text *)palloc(len + VARHDRSZ);
-    write_ptr = VARDATA(result);
+bool is_utf8(const char *sequence, int lenght) {
+    return 3 <= lenght && sequence[0] == '%' && sequence[1] != 'u' && sequence[1] != 'U';
+}
 
-    processed = 0;
-    while (processed < len) {
-        if (*read_ptr != '%') {
-            char c = *read_ptr;
+bool is_utf16(const char *sequence, int lenght) {
+    return 6 <= lenght && sequence[0] == '%' && (sequence[1] == 'u' || sequence[1] == 'U');
+}
 
-            if ((c >= '0' && c <= '9') || (c >= 'a' && c <= 'z') ||
-                (c >= 'A' && c <= 'Z') ||
-                (strchr(unreserved_special, c) != NULL)) {
-                *write_ptr++ = c;
-                real_len += 1;
-                processed += 1;
-                read_ptr += 1;
-            } else
-                elog(ERROR, "unaccepted chars in url code");
-        } else {
-            if (processed + 1 >= len)
-                elog(ERROR, "incomplete input string");
+void fetch_utf16(unsigned int *byte, const char *input) {
+    for (int i = 0; i < 4; ++i) {
+        *byte = ((*byte) << 4) | char2hex(input[i]);
+    }
+}
 
-            /* next two/four chars are part of UTF16 char */
-            if (read_ptr[1] == 'u' || read_ptr[1] == 'U') {
-                unsigned char b1;
-                unsigned char b2;
-                uint32_t u;
+text *decode(text *input, const char *unreserved_special) {
+    int input_lenght;
+    text *output;
+    char *cinput, *coutput, *current;
+
+    // Convert input data for processing
+    cinput = text_to_cstring(input);
+    input_lenght = strlen(cinput);
+    // Allocate memory for result string
+    coutput = palloc(sizeof(*coutput) * (input_lenght + 1));
+    current = coutput;
+
+    for (int i = 0; i < input_lenght;) {
+        if (cinput[i] == '%') {
+            // special character => start process '%XX' or '%XXXX' sequence of chars
+            if (is_utf16(cinput + i, input_lenght - i)) {
+                // current sequence is in utf16 encoding
+                unsigned int result;
+                unsigned int bytes[2];
                 unsigned char buffer[10];
-                int utf8len;
 
-                uint16_t c1;
-                uint16_t c2;
-
-                /* read first two bytes */
-                if (processed + 6 > len)
-                    elog(ERROR, "incomplete input string");
-
-                b1 = (char2hex(read_ptr[2]) << 4) | char2hex(read_ptr[3]);
-                b2 = (char2hex(read_ptr[4]) << 4) | char2hex(read_ptr[5]);
-
-                /*
-                 * expect input in UTF16-BE (Big Endian) and convert it
-                 * to LE used by Intel.
-                 */
-                c1 = b2 | (b1 << 8);
-
-                /* is surrogate pairs */
-                if (0xD800 <= c1 && c1 <= 0xDBFF) {
-                    if (processed + 10 > len)
+                fetch_utf16(bytes, cinput + i + 2);
+                
+                if (valid_utf16(bytes[0])) {
+                    if (10 < input_lenght - i) {
                         elog(ERROR, "incomplete input string");
+                    }
 
-                    b1 = (char2hex(read_ptr[6]) << 4) | char2hex(read_ptr[7]);
-                    b2 = (char2hex(read_ptr[8]) << 4) | char2hex(read_ptr[9]);
-                    c2 = b2 | (b1 << 8);
-
-                    if (!(0xDC00 <= c2 && c2 <= 0xDFFF))
+                    fetch_utf16(bytes + 1, cinput + i + 6);
+                    if (!valid_utf16(bytes[1])) {
                         elog(ERROR, "invalid utf16 input char");
+                    }
 
-                    u = decode_utf16_pair(c1, c2);
-                    processed += 10;
-                    read_ptr += 10;
+                    result = decode_utf16_pair(bytes);
+                    i += 10;
                 } else {
-                    u = c1;
-                    processed += 6;
-                    read_ptr += 6;
+                    result = bytes[0];
+                    i += 6;
                 }
 
-                unicode_to_utf8((pg_wchar)u, buffer);
-                utf8len = pg_utf_mblen(buffer);
-                strncpy(write_ptr, (const char *)buffer, utf8len);
-                write_ptr += utf8len;
-                real_len += utf8len;
+                unicode_to_utf8((pg_wchar)result, buffer);
+                strncpy(current, (const char *)buffer, pg_utf_mblen(buffer));
+                current += pg_utf_mblen(buffer);
+            } else if (is_utf8(cinput + i, input_lenght - i)) {
+                // current sequence is in utf8 encoding
+                current = write_character(current, (char2hex(cinput[i + 1]) << 4) | char2hex(cinput[i + 2]));
+                i += 3;
             } else {
-                /*
-                 * next two/three chars are part of UTF8 char, but it can
-                 * be decoded byte by byte.
-                 */
-                if (processed + 3 > len)
-                    elog(ERROR, "incomplete input string");
-
-                *((unsigned char *)write_ptr++) =
-                    (char2hex(read_ptr[1]) << 4) | char2hex(read_ptr[2]);
-                real_len += 1;
-                processed += 3;
-                read_ptr += 3;
+               // common case: not enough characters in line to decode special sequence => error 'incorrect sequence of tokens'
+               elog(ERROR, "incorrect sequence of tokens");
             }
+        } else if (allowed_character(cinput[i], unreserved_special)) {
+            // allowed and not '%' character => just copy it into result string
+            current = write_character(current, cinput[i]);
+            i += 1;
+        } else {
+            // cinput[i] - is not '%' and not allowed character => error 'unexpected character'
+            elog(ERROR, "unaccepted chars in url code"); // TODO rework text of errors
         }
     }
+    current = write_character(current, 0);
 
-    SET_VARSIZE(result, real_len + VARHDRSZ);
 
-    return result;
+    // Convert to text and return
+    output = cstring_to_text(coutput);
+    pfree(coutput);
+    return output;
 }
 
-Datum url_encode(PG_FUNCTION_ARGS) {
+Datum encode_url(PG_FUNCTION_ARGS) {
     if (PG_ARGISNULL(0)) {
         PG_RETURN_NULL();
     }
     PG_RETURN_TEXT_P(encode(PG_GETARG_TEXT_PP(0), ".-~_"));
 }
 
-Datum url_decode(PG_FUNCTION_ARGS) {
+Datum decode_url(PG_FUNCTION_ARGS) {
     if (PG_ARGISNULL(0)) {
         PG_RETURN_NULL();
     }
     PG_RETURN_TEXT_P(decode(PG_GETARG_TEXT_PP(0), ".-~_"));
 }
 
-Datum uri_encode(PG_FUNCTION_ARGS) {
+Datum encode_uri(PG_FUNCTION_ARGS) {
     if (PG_ARGISNULL(0)) {
         PG_RETURN_NULL();
     }
     PG_RETURN_TEXT_P(encode(PG_GETARG_TEXT_PP(0), "-_.!~*'();/?:@&=+$,#"));
 }
 
-Datum uri_decode(PG_FUNCTION_ARGS) {
+Datum decode_uri(PG_FUNCTION_ARGS) {
     if (PG_ARGISNULL(0)) {
         PG_RETURN_NULL();
     }
     PG_RETURN_TEXT_P(decode(PG_GETARG_TEXT_PP(0), "-_.!~*'();/?:@&=+$,#"));
 }
+

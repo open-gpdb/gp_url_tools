@@ -7,21 +7,21 @@ CREATE SCHEMA IF NOT EXISTS url_tools_schema;
 
 CREATE FUNCTION url_tools_schema.encode_url(text)
 RETURNS text
-AS 'MODULE_PATHNAME', 'url_encode'
+AS 'MODULE_PATHNAME', 'encode_url'
 LANGUAGE C STRICT;
 
 CREATE FUNCTION url_tools_schema.decode_url(text)
 RETURNS text
-AS 'MODULE_PATHNAME', 'url_decode'
+AS 'MODULE_PATHNAME', 'decode_url'
 LANGUAGE C STRICT;
 
 CREATE FUNCTION url_tools_schema.encode_uri(text)
 RETURNS text
-AS 'MODULE_PATHNAME', 'uri_encode'
+AS 'MODULE_PATHNAME', 'encode_uri'
 LANGUAGE C STRICT;
 
 CREATE FUNCTION url_tools_schema.decode_uri(text)
 RETURNS text
-AS 'MODULE_PATHNAME', 'uri_decode'
+AS 'MODULE_PATHNAME', 'decode_uri'
 LANGUAGE C STRICT;
 
