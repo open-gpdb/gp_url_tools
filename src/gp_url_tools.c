@@ -147,12 +147,22 @@ text *decode(text *input, const char *unreserved_special) {
 
                 if (valid_utf16(bytes[0])) {
                     if (10 < input_length - i) {
-                        elog(ERROR, "incomplete input string");
+                        ereport(
+                            ERROR,
+                            (errcode(ERRCODE_CHARACTER_NOT_IN_REPERTOIRE),
+                             errmsg("invalid sequence: not enough characters "
+                                    "to decode UTF-16 symbol from %d position",
+                                    i)));
                     }
 
                     fetch_utf16(bytes + 1, cinput + i + 6);
                     if (!valid_utf16(bytes[1])) {
-                        elog(ERROR, "invalid utf16 input char");
+                        ereport(
+                            ERROR,
+                            (errcode(ERRCODE_CHARACTER_NOT_IN_REPERTOIRE),
+                             errmsg("invalid UTF-16 byte: characters from %d "
+                                    "position define invalid UTF-16 symbol",
+                                    i + 6)));
                     }
 
                     result = decode_utf16_pair(bytes);
@@ -173,7 +183,11 @@ text *decode(text *input, const char *unreserved_special) {
             } else {
                 // common case: not enough characters in line to decode special
                 // sequence => error 'incorrect sequence of tokens'
-                elog(ERROR, "incorrect sequence of tokens");
+                ereport(ERROR,
+                        (errcode(ERRCODE_CHARACTER_NOT_IN_REPERTOIRE),
+                         errmsg("invalid sequence: not enough characters to "
+                                "decode any UTF-typed symbol from %d position",
+                                i)));
             }
         } else if (allowed_character(cinput[i], unreserved_special)) {
             // allowed and not '%' character => just copy it into result string
@@ -182,8 +196,9 @@ text *decode(text *input, const char *unreserved_special) {
         } else {
             // cinput[i] - is not '%' and not allowed character => error
             // 'unexpected character'
-            elog(ERROR,
-                 "unaccepted chars in url code"); // TODO rework text of errors
+            ereport(ERROR, (errcode(ERRCODE_CHARACTER_NOT_IN_REPERTOIRE),
+                            errmsg("unalloweed characters in url code: \"%c\"",
+                                   cinput[i])));
         }
     }
     current = write_character(current, 0);
