@@ -57,7 +57,7 @@ char *write_character(char *output, const char c) {
 }
 
 void valid_encoding_length(char *current, char *end, int length) {
-    Assert(current + length < end);
+    Assert(current + length <= end);
 }
 
 text *encode(text *input, const char *unreserved_special) {
