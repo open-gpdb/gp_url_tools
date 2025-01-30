@@ -19,6 +19,7 @@ Datum uri_decode(PG_FUNCTION_ARGS);
 static bool allowed_character(const char c, const char *unreserved_special);
 static unsigned char char2hex(char c);
 static char *write_character(char *output, const char c);
+static void valid_encoding_length(char *current, char *end, int length);
 static text *encode(text *input, const char *unreserved_special);
 static bool valid_utf16(unsigned int byte, int byte_num);
 static unsigned int decode_utf16_pair(unsigned int bytes[2]);
@@ -55,28 +56,38 @@ char *write_character(char *output, const char c) {
     return ++output;
 }
 
+void valid_encoding_length(char *current, char *end, int length) {
+    Assert(current + length < end);
+}
+
 text *encode(text *input, const char *unreserved_special) {
-    int input_length;
+    int input_length, output_length;
     text *output;
-    char *cinput, *coutput, *current;
+    char *cinput, *coutput, *current, *cend;
 
     // Convert input data for processing
     cinput = text_to_cstring(input);
     input_length = strlen(cinput);
-    // Allocate memory for result url string
-    coutput = palloc(sizeof(*coutput) * (3 * input_length + 1));
+    // Allocate memory for result url string (allocate more memory for bad
+    // cases)
+    output_length = 3 * input_length + 1;
+    coutput = palloc(sizeof(*coutput) * output_length);
     current = coutput;
+    cend = coutput + output_length;
 
     for (int i = 0; i < input_length; ++i) {
         if (allowed_character(cinput[i], unreserved_special)) {
             // single character => does not encode it or skip it
+            valid_encoding_length(current, cend, 1);
             current = write_character(current, cinput[i]);
         } else {
             // some characters => process them all into '%XX' or '%XXXX'
             // notation
+            valid_encoding_length(current, cend, 2);
             current += sprintf(current, "%%%02X", (unsigned char)cinput[i]);
         }
     }
+    valid_encoding_length(current, cend, 1);
     current = write_character(current, 0);
 
     // Convert to text and return
