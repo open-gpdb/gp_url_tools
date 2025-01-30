@@ -23,8 +23,8 @@ static text *encode(text *input, const char *unreserved_special);
 static bool valid_utf16(unsigned int byte);
 static unsigned int decode_utf16_pair(unsigned int bytes[2]);
 static text *decode(text *input, const char *unreserved_special);
-static bool is_utf8(const char *sequence, int lenght);
-static bool is_utf16(const char *sequence, int lenght);
+static bool is_utf8(const char *sequence, int length);
+static bool is_utf16(const char *sequence, int length);
 static void fetch_utf16(unsigned int *byte, const char *input);
 
 static const unsigned int utf16_low = 0xD800;
@@ -32,30 +32,17 @@ static const unsigned int utf16_high = 0xDBFF;
 static const unsigned int utf16_decode = 0x03FF;
 static const unsigned int utf16_decode_base = 0x10000;
 
-static const unsigned char hexlookup[256] = {
-    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
-    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
-    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, 0,  1,  2,  3,  4,  5,  6,  7,  8,
-    9,  -1, -1, -1, -1, -1, -1, -1, 10, 11, 12, 13, 14, 15, -1, -1, -1, -1, -1,
-    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
-    -1, -1, 10, 11, 12, 13, 14, 15, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
-    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
-    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
-    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
-    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
-    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
-    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
-    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
-    -1, -1, -1, -1, -1, -1, -1, -1, -1,
-};
-
 unsigned char char2hex(char c) {
-    unsigned char res = hexlookup[(unsigned char)c];
-    if (res < 0) {
-        ereport(ERROR, (errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-                        errmsg("invalid hexadecimal digit: \"%c\"", c)));
+    if ('0' <= c && c <= '9') {
+        return c - '0';
+    } else if ('A' <= c && c <= 'Z') {
+        return c - 'A' + 10;
+    } else if ('a' <= c && c <= 'z') {
+        return c - 'a' + 10;
     }
-    return res;
+    ereport(ERROR, (errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+                    errmsg("invalid hexadecimal digit: \"%c\"", c)));
+    return -1;
 }
 
 bool allowed_character(const char c, const char *unreserved_special) {
@@ -69,18 +56,18 @@ char *write_character(char *output, const char c) {
 }
 
 text *encode(text *input, const char *unreserved_special) {
-    int input_lenght;
+    int input_length;
     text *output;
     char *cinput, *coutput, *current;
 
     // Convert input data for processing
     cinput = text_to_cstring(input);
-    input_lenght = strlen(cinput);
+    input_length = strlen(cinput);
     // Allocate memory for result url string
-    coutput = palloc(sizeof(*coutput) * (3 * input_lenght + 1));
+    coutput = palloc(sizeof(*coutput) * (3 * input_length + 1));
     current = coutput;
 
-    for (int i = 0; i < input_lenght; ++i) {
+    for (int i = 0; i < input_length; ++i) {
         if (allowed_character(cinput[i], unreserved_special)) {
             // single character => does not encode it or skip it
             current = write_character(current, cinput[i]);
@@ -110,13 +97,22 @@ unsigned int decode_utf16_pair(unsigned int bytes[2]) {
             (bytes[1] & utf16_decode));
 }
 
-bool is_utf8(const char *sequence, int lenght) {
-    return 3 <= lenght && sequence[0] == '%' && sequence[1] != 'u' &&
+// Check that sequence of bytes starts with 'symbol' in UTF-8 encoding
+//
+// UTF-16 'symbols' starts with '%' or '%', and 'XX' after it.
+// 'XX' - hex sequence that encode bytes
+bool is_utf8(const char *sequence, int length) {
+    return 3 <= length && sequence[0] == '%' && sequence[1] != 'u' &&
            sequence[1] != 'U';
 }
 
-bool is_utf16(const char *sequence, int lenght) {
-    return 6 <= lenght && sequence[0] == '%' &&
+// Check that sequence of bytes starts with 'symbol' in UTF-16 encoding
+//
+// UTF-16 'symbols' starts with '%u' or '%U', and 'XXXX' after it.
+// 'XXXX' - hex sequence that encode bytes (optinally sequence 'XXXX' ->
+// 'XXXXXXXX')
+bool is_utf16(const char *sequence, int length) {
+    return 6 <= length && sequence[0] == '%' &&
            (sequence[1] == 'u' || sequence[1] == 'U');
 }
 
@@ -127,23 +123,22 @@ void fetch_utf16(unsigned int *byte, const char *input) {
 }
 
 text *decode(text *input, const char *unreserved_special) {
-    int input_lenght;
+    int input_length;
     text *output;
     char *cinput, *coutput, *current;
 
     // Convert input data for processing
     cinput = text_to_cstring(input);
-    input_lenght = strlen(cinput);
+    input_length = strlen(cinput);
     // Allocate memory for result string
-    coutput = palloc(sizeof(*coutput) * (input_lenght + 1));
+    coutput = palloc(sizeof(*coutput) * (input_length + 1));
     current = coutput;
 
-    for (int i = 0; i < input_lenght;) {
+    for (int i = 0; i < input_length;) {
         if (cinput[i] == '%') {
             // special character => start process '%XX' or '%XXXX' sequence of
             // chars
-            if (is_utf16(cinput + i, input_lenght - i)) {
-                // current sequence is in utf16 encoding
+            if (is_utf16(cinput + i, input_length - i)) {
                 unsigned int result;
                 unsigned int bytes[2];
                 unsigned char buffer[10];
@@ -151,7 +146,7 @@ text *decode(text *input, const char *unreserved_special) {
                 fetch_utf16(bytes, cinput + i + 2);
 
                 if (valid_utf16(bytes[0])) {
-                    if (10 < input_lenght - i) {
+                    if (10 < input_length - i) {
                         elog(ERROR, "incomplete input string");
                     }
 
@@ -170,8 +165,7 @@ text *decode(text *input, const char *unreserved_special) {
                 unicode_to_utf8((pg_wchar)result, buffer);
                 strncpy(current, (const char *)buffer, pg_utf_mblen(buffer));
                 current += pg_utf_mblen(buffer);
-            } else if (is_utf8(cinput + i, input_lenght - i)) {
-                // current sequence is in utf8 encoding
+            } else if (is_utf8(cinput + i, input_length - i)) {
                 current =
                     write_character(current, (char2hex(cinput[i + 1]) << 4) |
                                                  char2hex(cinput[i + 2]));
