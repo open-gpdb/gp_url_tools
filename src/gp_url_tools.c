@@ -20,15 +20,15 @@ static bool allowed_character(const char c, const char *unreserved_special);
 static unsigned char char2hex(char c);
 static char *write_character(char *output, const char c);
 static text *encode(text *input, const char *unreserved_special);
-static bool valid_utf16(unsigned int byte);
+static bool valid_utf16(unsigned int byte, int byte_num);
 static unsigned int decode_utf16_pair(unsigned int bytes[2]);
 static text *decode(text *input, const char *unreserved_special);
 static bool is_utf8(const char *sequence, int length);
 static bool is_utf16(const char *sequence, int length);
 static void fetch_utf16(unsigned int *byte, const char *input);
 
-static const unsigned int utf16_low = 0xD800;
-static const unsigned int utf16_high = 0xDBFF;
+static const unsigned int utf16_low[2] = {0xD800, 0xDC00};
+static const unsigned int utf16_high[2] = {0xDBFF, 0xDFFF};
 static const unsigned int utf16_decode = 0x03FF;
 static const unsigned int utf16_decode_base = 0x10000;
 
@@ -85,13 +85,13 @@ text *encode(text *input, const char *unreserved_special) {
     return output;
 }
 
-bool valid_utf16(unsigned int byte) {
-    return utf16_low <= byte && byte <= utf16_high;
+bool valid_utf16(unsigned int byte, int byte_num) {
+    return utf16_low[byte_num] <= byte && byte <= utf16_high[byte_num];
 }
 
 unsigned int decode_utf16_pair(unsigned int bytes[2]) {
-    Assert(valid_utf16(bytes[0]));
-    Assert(valid_utf16(bytes[1]));
+    Assert(valid_utf16(bytes[0], 0));
+    Assert(valid_utf16(bytes[1], 1));
 
     return (utf16_decode_base + ((bytes[0] & utf16_decode) << 10) +
             (bytes[1] & utf16_decode));
@@ -139,13 +139,13 @@ text *decode(text *input, const char *unreserved_special) {
             // special character => start process '%XX' or '%XXXX' sequence of
             // chars
             if (is_utf16(cinput + i, input_length - i)) {
-                unsigned int result;
-                unsigned int bytes[2];
-                unsigned char buffer[10];
+                unsigned int result = 0;
+                unsigned int bytes[2] = {0, 0};
+                unsigned char buffer[10] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
 
                 fetch_utf16(bytes, cinput + i + 2);
 
-                if (valid_utf16(bytes[0])) {
+                if (valid_utf16(bytes[0], 0)) {
                     if (10 < input_length - i) {
                         ereport(
                             ERROR,
@@ -156,7 +156,7 @@ text *decode(text *input, const char *unreserved_special) {
                     }
 
                     fetch_utf16(bytes + 1, cinput + i + 6);
-                    if (!valid_utf16(bytes[1])) {
+                    if (!valid_utf16(bytes[1], 1)) {
                         ereport(
                             ERROR,
                             (errcode(ERRCODE_CHARACTER_NOT_IN_REPERTOIRE),
