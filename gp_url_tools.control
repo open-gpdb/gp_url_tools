@@ -3,3 +3,4 @@ comment = 'Greenplum extension providing functionality for working with URL addr
 default_version = '1.0'
 module_pathname = '$libdir/gp_url_tools'
 relocatable = true
+trusted = true
